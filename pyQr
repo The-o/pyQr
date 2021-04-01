@@ -4,18 +4,20 @@ import wx
 import wx.adv
 import qrcode
 import sys
+import pyperclip
 
 from io import BytesIO
 from typing import List
 from base64 import b64decode
 from wx.lib.newevent import NewEvent
+from pyzbar import pyzbar
 
 def makeScreenshot() -> wx.Bitmap:
     screen = wx.ScreenDC()
     size = screen.GetSize()
     width = size.width
     height = size.height
-    
+
     bmp = wx.Bitmap(width, height)
     mem = wx.MemoryDC(bmp)
     mem.Blit(0, 0, width, height, screen, 0, 0)
@@ -38,6 +40,16 @@ def bmpToY800Pixels(bmp: wx.Bitmap) -> bytes:
 
     return bytes(buf)
 
+def makeQrCode(text: str) -> wx.Bitmap:
+    img = qrcode.make(
+        text,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+    ).convert('RGB')
+    width, height = img.size
+    width, height = width // 3, height // 3
+    img = img.resize((width, height))
+    return wx.Bitmap.FromBuffer(width, height, img.tobytes())
+
 class QrData:
     def __init__(self, text: str, x: int = 0, y: int = 0, *, width: int = 0, height: int = 0, screenshot: wx.Bitmap = None, bmp: wx.Bitmap = None):
         if screenshot != None:
@@ -48,79 +60,105 @@ class QrData:
             self.text = text
             self.bmp = bmp
 
-def scanWithZbar(bmp: wx.Bitmap) -> List[QrData]:
-    import zbar
-    pixelData = bmpToY800Pixels(bmp)
-    img = zbar.Image(bmp.GetWidth(), bmp.GetHeight(), 'Y800',  pixelData)
-
-    scanner = zbar.ImageScanner()
-    scanner.scan(img)
-
-    result = []
-    for symbol in img:
-        x0 = bmp.GetWidth()
-        y0 = bmp.GetHeight()
-        x1 = 0
-        y1 = 0
-
-        for pt in symbol.location:
-            x, y = pt
-            if x0 > x: x0 = x
-            if y0 > y: y0 = y
-            if x1 < x: x1 = x
-            if y1 < y: y1 = y
-
-        result.append(QrData(symbol.data, x = x0, y = y0, width = x1 - x0, height = y1 - y0, screenshot = bmp))
-
-    return result
-
-def scanWithPyzbar(bmp: wx.Bitmap) -> List[QrData]:
-    from pyzbar import pyzbar
+def scanScreenshot(bmp:wx.Bitmap) -> List[QrData]:
     pixelData = bmpToY800Pixels(bmp)
     symbols = pyzbar.decode((pixelData, bmp.GetWidth(), bmp.GetHeight()))
 
     result = []
     for symbol in symbols:
         rect = symbol.rect
-        result.append(QrData(symbol.data, x = rect.left, y = rect.top, width = rect.width, height = rect.height, screenshot = bmp))
+        text = symbol.data.decode('utf-8')
+        result.append(QrData(text, x = rect.left, y = rect.top, width = rect.width, height = rect.height, screenshot = bmp))
 
     return result
 
-def scanScreenshot(bmp:wx.Bitmap) -> List[QrData]:
-    try:
-        qrs = scanWithZbar(bmp)
-    except ModuleNotFoundError:
-        try:
-            qrs = scanWithPyzbar(bmp)
-        except ModuleNotFoundError:
-            qrs = []
-
-    return qrs
-
-class QrPanel(wx.Panel):
-    SelectEvent, EVT_SELECT = NewEvent()
+class QrPanel(wx.Control):
+    ClickEvent, EVT_CLICK = NewEvent()
 
     def __init__(self, parent: wx.Frame, qr: QrData):
         super().__init__(parent, wx.ID_ANY, pos=qr.rect.Position, size=qr.rect.Size, style=wx.BORDER_NONE)
-        self._qr = qr
+        self._bmp = qr.bmp
+        self._text = qr.text
 
+        self.SetPosition(qr.rect.Position)
+        self.SetMaxSize(qr.rect.Size)
+        self.SetSize(qr.rect.Size)
         self.SetToolTip(wx.ToolTip(qr.text))
         self.Bind(wx.EVT_PAINT, self._onPaint)
         self.Bind(wx.EVT_LEFT_DOWN, self._onClick)
 
     def _onPaint(self, event):
-        self.SetPosition(self._qr.rect.Position)
-        self.SetSize(self._qr.rect.Size)
         dc = wx.PaintDC(self)
-        dc.DrawBitmap(self._qr.bmp, 0, 0)
+        dc.DrawBitmap(self._bmp, 0, 0)
 
     def _onClick(self, event):
-        self.QueueEvent(QrPanel.SelectEvent(qr = self._qr))
+        self.QueueEvent(QrPanel.ClickEvent(text = self._text))
+
+class QrScanWindow(wx.Frame):
+    GotTextEvent, EVT_GOT_TEXT = NewEvent()
+
+    #----------------------------------------------------------------------
+    def __init__(self, bmp: wx.Bitmap, qrs: List[QrData]):
+        super().__init__(None, wx.ID_ANY, '', size=bmp.GetSize(), pos=(0,0), style=wx.STAY_ON_TOP|wx.FRAME_NO_TASKBAR|wx.BORDER_NONE)
+
+        self._bmp = bmp.ConvertToImage().ConvertToDisabled(0).ConvertToBitmap()
+        self.Bind(wx.EVT_CLOSE, self._onClose)
+        # self.Bind(wx.EVT_PAINT, self._onPaint)
+        self.Bind(wx.EVT_ACTIVATE, self._onActivate)
+        self.Show()
+
+        self._mainPanel = wx.Panel(self, size=bmp.GetSize(), pos=(0,0), style=wx.STAY_ON_TOP|wx.BORDER_NONE)
+        self._mainPanel.Bind(wx.EVT_LEFT_DOWN, self._onClick)
+        self._mainPanel.Bind(wx.EVT_PAINT, self._onPanelPaint)
+
+        self._qrPanels = []
+        for qr in qrs:
+            qrPanel = QrPanel(self._mainPanel, qr)
+            qrPanel.Bind(QrPanel.EVT_CLICK, self._onQrClick)
+            self._qrPanels.append(qrPanel)
+
+    def _onClick(self, event:wx.CommandEvent):
+        self.Close()
+
+    def _onActivate(self, event: wx.ShowEvent):
+        self._setPosAndSize()
+
+    def _onPanelPaint(self, event):
+        dc = wx.PaintDC(self._mainPanel)
+        dc.DrawBitmap(self._bmp, 0, 0)
+
+    def _onQrClick(self, event):
+        self.QueueEvent(QrScanWindow.GotTextEvent(text = event.text))
+        self.Close()
+
+    def _onClose(self):
+        for qrPanel in self._qrPanels:
+            qrPanel.Destroy()
+        self._mainPanel.Destroy()
+
+    def _setPosAndSize(self):
+        self.SetPosition((0,0))
+        self.SetClientSize(self._bmp.GetSize())
+
+
+class QrPopup(wx.Dialog):
+    def __init__(self, text: str):
+        super().__init__(None, style=wx.STAY_ON_TOP|wx.FRAME_NO_TASKBAR)
+
+        self._panel = QrPanel(self, QrData(text, 0, 0, bmp=makeQrCode(text)))
+
+        self._panel.Bind(QrPanel.EVT_CLICK, self._onClick)
+        self.SetClientSize(self._panel.GetSize())
+        self.Center()
+        self.Show()
+
+    def _onClick(self, event):
+        self.Close()
 
 class QrTaskBarIcon(wx.adv.TaskBarIcon):
     ExitEvent, EVT_EXIT = NewEvent()
-    ReadQRsEvent, EVT_READ_QRS = NewEvent()
-    ShowQREvent, EVT_SHOW_QR = NewEvent()
+    ScanQREvent, EVT_SCAN_QR = NewEvent()
+    GenQREvent, EVT_GEN_QR = NewEvent()
 
     TrayTooltip = 'pyQr'
     TrayIconBmp = wx.Image(BytesIO(b64decode(
@@ -156,13 +194,14 @@ class QrTaskBarIcon(wx.adv.TaskBarIcon):
         super().__init__()
 
         self._setIcon(QrTaskBarIcon.TrayIconBmp)
-        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._onClick)
+        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._onMenuScanQR)
 
     def CreatePopupMenu(self):
         menu = wx.Menu()
-        self._createMenuItem(menu, "QR", self._onMenuQR)
+        self._createMenuItem(menu, 'Сканировать QR', self._onMenuScanQR)
+        self._createMenuItem(menu, 'Сгенерировать QR', self._onMenuGenQR)
         menu.AppendSeparator()
-        self._createMenuItem(menu, "Выход", self._onMenuExit)
+        self._createMenuItem(menu, 'Выход', self._onMenuExit)
         return menu
 
     def _createMenuItem(self, menu: wx.Menu, label:str, func):
@@ -174,164 +213,101 @@ class QrTaskBarIcon(wx.adv.TaskBarIcon):
         icon = wx.Icon(icon.ConvertToBitmap())
         self.SetIcon(icon, QrTaskBarIcon.TrayTooltip)
 
-    def _onClick(self, event: wx.CommandEvent):
-        self.QueueEvent(QrTaskBarIcon.ReadQRsEvent())
-
     def _onMenuExit(self, event: wx.CommandEvent):
-         self.QueueEvent(QrTaskBarIcon.ExitEvent())
+        self.QueueEvent(QrTaskBarIcon.ExitEvent())
 
-    def _onMenuQR(self, event: wx.CommandEvent):
-        self.QueueEvent(QrTaskBarIcon.ShowQREvent())
+    def _onMenuScanQR(self, event: wx.CommandEvent):
+        self.QueueEvent(QrTaskBarIcon.ScanQREvent())
 
-class QrPopup(wx.Dialog):
-    def __init__(self, text: str):
-        super().__init__(None, style=wx.STAY_ON_TOP|wx.FRAME_NO_TASKBAR)
-        img = qrcode.make(
-            text,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-        ).convert('RGB')
-        width, height = img.size
-        width, height = width // 3, height // 3
-        img = img.resize((width, height))
-        self._bmp = wx.Bitmap.FromBuffer(width, height, img.tobytes())
+    def _onMenuGenQR(self, event: wx.CommandEvent):
+        self.QueueEvent(QrTaskBarIcon.GenQREvent())
 
-        self.Bind(wx.EVT_PAINT, self._onPaint)
-        self.Bind(wx.EVT_LEFT_DOWN, self._onClick)
+class PyQrApp(wx.App):
 
-        self.SetClientSize((width, height))
-        self.Center()
-        self.Show()
+    NO_TRAY_MESSAGE = \
+'''К сожалению, в вашем окружении отсутствует системный трей
+Пожалуйста, воспользуйтесь командами:
+* pyQr gen  - для генерирования QR-кода
+* pyQr scan - для сканирования QR-кодов
+Эти команды можно добавить в ярлыки на панели быстрого запуска
+'''
 
-    def _onPaint(self, event: wx.PaintEvent):
-        dc = wx.PaintDC(self)
-        dc.DrawBitmap(self._bmp, 0, 0)
+    def __init__(self, cmd):
+        self._cmd = cmd
+        self._taskBarIcon = None
+        self.quickClose = False
+        super().__init__()
 
-    def _onClick(self, event: wx.MouseEvent):
-        self.Close()
 
-class PyQrWindow(wx.Frame):
-    #----------------------------------------------------------------------
-    def __init__(self):
-        super().__init__(None, wx.ID_ANY, "", size=(1,1), style=wx.STAY_ON_TOP|wx.FRAME_NO_TASKBAR|wx.BORDER_NONE)
-        self._taskBarIcon = QrTaskBarIcon()
-        self._bmp = wx.NullBitmap
-        self._qrPanels = []
-        self._showing = False
-        self._qrPopup = None
-
-        self.Bind(wx.EVT_CLOSE, self._onExit)
-        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_EXIT, self._onExit)
-        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_READ_QRS, self._onReadQRs)
-        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_SHOW_QR, self._onShowQR)
-
-    #----------------------------------------------------------------------
-    def _onReadQRs(self, event) -> None:
-        if self._showing:
-            return
-
-        self._showing = True
-
-        bmp = makeScreenshot()
-        qrs = scanScreenshot(bmp)
-
-        self._showing = self._showQRs(bmp, qrs)
-
-    #----------------------------------------------------------------------
-    def _hideQRs(self):
-        self.Hide()
-
-        for qrPanel in self._qrPanels:
-            qrPanel.Unbind(QrPanel.EVT_SELECT)
-            qrPanel.Destroy()
-        self._qrPanels = []
-
-        self.Unbind(wx.EVT_LEFT_DOWN)
-        self.Unbind(wx.EVT_PAINT)
-        self.Unbind(wx.EVT_ACTIVATE)
-        self.Unbind(wx.EVT_CLOSE)
-
-        self._showing = False
-
-    #----------------------------------------------------------------------
-    def _showQRs(self, bmp: wx.Bitmap, qrs: List[QrData]):
-        if len(qrs) == 0:
-            return False
-
-        self._bmp = bmp.ConvertToImage().ConvertToDisabled(0).ConvertToBitmap()
-
-        self._setPosAndSize()
-
-        for qr in qrs:
-            qrPanel = QrPanel(self, qr)
-            qrPanel.Bind(QrPanel.EVT_SELECT, self._onQrClick)
-            self._qrPanels.append(qrPanel)
-
-        self.Bind(wx.EVT_LEFT_DOWN, self._onClick)
-        self.Bind(wx.EVT_PAINT, self._onPaint)
-        self.Bind(wx.EVT_ACTIVATE, self._onActive)
-        self.Show()
+    def OnInit(self):
+        if self._cmd == 'gen':
+            self._doGenQR()
+        elif self._cmd == 'scan':
+            self.quickClose = True
+            self._doScanQR()
+        else:
+            self._doRun()
 
         return True
 
     def _showMessage(self, message, flags = wx.ICON_WARNING):
-        if not self._taskBarIcon.ShowBalloon("pyQr", message, flags = flags):
-            wx.adv.NotificationMessage("pyQr", parent=self, message = message, flags = flags).Show()
+        if self._taskBarIcon == None or not self._taskBarIcon.ShowBalloon('pyQr', message, flags = flags):
+            wx.adv.NotificationMessage('pyQr', parent=None, message = message, flags = flags).Show()
 
-    #----------------------------------------------------------------------
-    def _setPosAndSize(self):
-        self.SetPosition((0,0))
-        self.SetSize(self._bmp.GetSize())
-
-    #----------------------------------------------------------------------
-    def _onActive(self, event: wx.ShowEvent):
-        self._setPosAndSize()
-
-    #----------------------------------------------------------------------
-    def _onPaint(self, event: wx.PaintEvent):
-        dc = wx.PaintDC(self)
-        dc.DrawBitmap(self._bmp, 0, 0)
-
-    #----------------------------------------------------------------------
-    def _onClick(self, event:wx.CommandEvent):
-        self._hideQRs()
-
-    #----------------------------------------------------------------------
-    def _onQrClick(self, event:QrPanel.SelectEvent):
-        qr = event.qr
-        if wx.TheClipboard.Open():
-            wx.TheClipboard.SetData(wx.TextDataObject(qr.text))
-            wx.TheClipboard.Close()
-        else:
-            self._showMessage("Нет доступа к буферу обмена")
+    def _doRun(self):
+        if not QrTaskBarIcon.IsAvailable():
+            self._showMessage(PyQrApp.NO_TRAY_MESSAGE, wx.ICON_ERROR)
             return
 
-        self._hideQRs()
+        self._mainWindow = wx.Frame(None, wx.ID_ANY, '', size=(1,1), pos=(0,0), style=wx.STAY_ON_TOP|wx.FRAME_NO_TASKBAR|wx.BORDER_NONE)
+        self._taskBarIcon = QrTaskBarIcon()
+        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_EXIT, self._onExit)
+        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_GEN_QR, self._onGenQR)
+        self._taskBarIcon.Bind(QrTaskBarIcon.EVT_SCAN_QR, self._onScanQR)
 
-    #----------------------------------------------------------------------
-    def _onShowQR(self, event: QrTaskBarIcon.ShowQREvent):
-        if self._showing:
-            return
+    def _onGenQR(self, event):
+        self._doGenQR()
 
-        self._showing = self._showQR()
+    def _onScanQR(self, event):
+        self._doScanQR()
 
-    #----------------------------------------------------------------------
-    def _showQR(self):
+    def _onExit(self, event):
+        self._mainWindow.Close()
+        self._mainWindow.Destroy()
+        self._taskBarIcon.Destroy()
+
+    def _copyFromClipboard1(self) -> str:
         data = wx.TextDataObject()
-
         if wx.TheClipboard.Open():
             wx.TheClipboard.GetData(data)
             wx.TheClipboard.Close()
+            return data.text
         else:
-            self._showMessage("Нет доступа к буферу обмена")
+            return ''
+
+    def _copyToClipboard1(self, text: str) -> bool:
+        if wx.TheClipboard.Open():
+            wx.TheClipboard.SetData(wx.TextDataObject(text))
+            wx.TheClipboard.Close()
+            return True
+        else:
             return False
 
-        text = data.GetText()
-        if text == "":
-            self._showMessage("В буфере обмена пусто")
+    def _copyFromClipboard(self) -> str:
+        return pyperclip.paste()
+
+    def _copyToClipboard(self, text: str) -> bool:
+        return pyperclip.copy(text)
+
+    # ---------------------------------- Generate QR ---------------------------------------
+    def _doGenQR(self):
+        text = self._copyFromClipboard()
+        if text == '':
+            self._showMessage('В буфере обмена пусто')
             return False
 
         if len(text.encode('utf-8')) > 2953:
-            self._showMessage("Слишком много текста")
+            self._showMessage('Превышен максимальный размер текста в 2953 байт')
             return False
 
         self._qrPopup = QrPopup(text)
@@ -339,25 +315,52 @@ class PyQrWindow(wx.Frame):
 
         return True
 
-    #----------------------------------------------------------------------
     def _onQrPopupClose(self, event):
-        self._hideQR()
+        self._hideQRPopup()
 
-    #----------------------------------------------------------------------
-    def _hideQR(self):
+    def _hideQRPopup(self):
         self._qrPopup.Destroy()
         self._qrPopup = None
-        self._showing = False
+    # --------------------------------- /Generate QR ---------------------------------------
 
-    #----------------------------------------------------------------------
-    def _onExit(self, event:QrTaskBarIcon.ExitEvent):
-        if self._qrPopup != None:
-            self._qrPopup.Close()
-        self._taskBarIcon.RemoveIcon()
-        self._taskBarIcon.Destroy()
-        self.Destroy()
+    # ------------------------------------ Scan QR -----------------------------------------
+    def _doScanQR(self) -> None:
+        bmp = makeScreenshot()
+        qrs = scanScreenshot(bmp)
 
-if __name__ == "__main__":
-    MyApp = wx.App()
-    PyQrWindow()
-    MyApp.MainLoop()
+        if len(qrs) == 0:
+            self._showMessage('QR-коды на экране не найдены', wx.ICON_INFORMATION)
+            return
+
+        self._scanWindow = QrScanWindow(bmp, qrs)
+        self._scanWindow.Bind(QrScanWindow.EVT_GOT_TEXT, self._onGotText)
+        self._scanWindow.Bind(wx.EVT_CLOSE, self._onScanWindowClose)
+
+    def _onScanWindowClose(self, event):
+        self._scanWindow.Destroy()
+        self._scanWindow = None
+
+    def _onGotText(self, event):
+        self._doGotText(event.text)
+
+    def _doGotText(self, text:str):
+        self._copyToClipboard(text)
+    # ----------------------------------- /Scan QR -----------------------------------------
+
+if __name__ == '__main__':
+    cmd = '' if len(sys.argv) == 1 else sys.argv[1]
+    if cmd in ('', 'scan', 'gen'):
+        PyQrApp(cmd).MainLoop()
+    else:
+        print(
+'''
+Usage: pyQr [command]
+
+Commands:
+    scan - scan display for QR codes and copy selected's text to clipboard
+    gen - generate QR-code from clipboard text
+    help - print this message
+
+Runs system tray-icon application if no command is specified
+'''
+)

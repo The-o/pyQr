@@ -58,7 +58,7 @@ sudo apt install libzbar0
 ```
 # Как использовать:
 
-После запуска в системном трее появится иконка ![в виде QR-кода](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QAAAAAAAD5Q7t/AAAACXBIWXMAAC4jAAAuIwF4pT92AAAAB3RJTUUH5QMWFQQCKACXsQAABHxJREFUOMt9lV9IVHkUxz+/uXNndJxRR29u9sf8h81so2Nh2b9xl0YiKAQfYtkgeujPQkR/rBfrqbfFanuLFjLwoSCCjJAIUrSsdjPTRdBRiVWbInAb8Y4zd2a8d+buQ1u7ruyepwPnnA8czvecIwzDMFVV5d8mhCA3N5dEIoHT6QQgFouRnZ1NNBrFNM1lNXl5eVhVVWXfvn0Eg8Elwc7OTnp6emhvb+f48eMAPH78mMbGRgKBAM3NzUvye3p66OrqwgoQDAY5ffo009PTAHi9Xnq7uxHAjbY2vB4PALV+P263m3yXi9bWVkKhEAClpaVfwNbPzvT0NHV1ddglialwGKcs43S5+PHaNcaHhwGo9vkAcMoyqqqyo76eVDrN4ODgciCAXZIocjgQQIEskzEMVuTn49u/H4DwmzesXLmSAllGAEUOB7OatqT1L0Cv18tUOIwAChWFQpuNLIeDVatXM/zwIQAzIyPU1NVRaLNRqCgMTExg/jWM+/fvfwIKIejs7KS3uxunLFMgyxTabLhlmbiq8sfYGJsaGgBQCgqQhMAty7Q0NRFZXGRO14npOvMLC7S0tCAMwzCj0Shut5t4LEZC0xCAJAQSEJ2ZYerWLexr1hCZnMR/5gzFHg+GYZDUNCxWK7GFBUxAURSsiUSC7u5uav1+fnn6lLl37yhfuxaXJJGTTGJ5/pz1Bw+yYvdu3ty+TbivD4vNhsXh4Ne+PtbX1vLT5cuUlJdz8uRJrE6nk61btxL0+/nh7Fl27tpFXk4OdiHIymQQubm4JOlTy9XV5KRSPLt6lW8uXMAiBPluN2UVFXzt8yHLMiIej5u9vb0UFRURj0Z5/egR8Rcv+P7KFdwFBbiLizHHxzGiUaSNG1E/fkRLpSiqrCQyO8vM27f8PjVFlceD3+/HkkwmGRkZYfPmzRi6Tk1DA19t3054bAylqgrJ5UJ4PFBRgSUrC6WqiveTk2RlZ7N63TpMYDwUYmhoCF3Xlw/FarWSSiTIGAay1crQjRtkWSwAJDMZNh05gqZpDDx5wt4DB3jW308ymaS6pgZFURBzc3NmIBAg3+VaJpuW9naGu7r49tAhDF3nSUcHv927R2bVKkZfv2Zelnk/P8/Pd+7g8/mw2WxYTdOkubmZ1tZWVFX9IuyWpibSpslCJkMqlaLv7l36b95kdTDI3sOHuXDsGFt27sQwTVKpFBcvXuTcuXN/b0ooFGJHfT1FDgcDExNEFhcxgXgmw+ToKHcvXULPZDhz6hT9vb18d+IEJWVlAHz48IENGzZgt9uX7nIqnWZW0zCBOV0n2+GgessWFhcXqT96lPKqKrIdDtaUleHxeuno6CASiRAIBCgpKUGSJCyfYaWlpQwODvL85Uvy8vKI6To5Tic+v580sHHbNhr37GHg1SsutbVhmiaVlZUEAgEePHhAQ0MDmqYhIpGI+V8Htr+/n+vXrxMOhwE4f/48siyTTqdRFIVYLMbo6CjRaJSamhqKi4s/yeb/XsA/Yy6XC1mWl+Qlk0mEENjtdgD+BIUh11qhyPEpAAAAAElFTkSuQmCC).
+После запуска в системном трее появится иконка в виде QR-кода*.
 
 При клике на неё правой кнопкой мыши в случае, если на экране отображаются QR-коды:
 * Экран затемнится кроме распознанных QR-кодов;
@@ -67,9 +67,25 @@ sudo apt install libzbar0
 * При клике вне распознанного QR-кода, затемнение экрана исчезнет, в буфер ничего не скопируется
 
 При клике левой кнопкой мыши откроется меню с двумя пунктами:
-* QR
+* Сканировать QR
+* Сгенерировать QR
 * Выход
 
-При клике на пункт "QR", если в буфере обмена есть текст, будет сгенерирован и отбражён QR-код в новом окне. По клику на QR-код окно будет закрыто. Если в буфере обмена нет текста или размер текста превышает 2953 байт, будет выведено сообщение.
+Клик на пункте "Сканировать QR" аналогичен по действию клику по иконке системного трея.
+
+При клике на пункт "Сгенерировать QR", если в буфере обмена есть текст, будет сгенерирован и отбражён QR-код в новом окне. По клику на QR-код окно будет закрыто. Если в буфере обмена нет текста или размер текста превышает 2953 байт, будет выведено сообщение.
 
 При клике на пункт Выход произойдёт выход из программы.
+
+# * Окружение, не поддерживающее системный трей
+
+Некоторое окружение не поддерживает системный трей. При запуске pyQr в таком окружении будет выдано сообщение:
+```
+К сожалению, в вашем окружении отсутствует системный трей
+Пожалуйста, воспользуйтесь командами:
+* pyQr gen  - для генерирования QR-кода
+* pyQr scan - для сканирования QR-кодов
+Эти команды можно добавить в ярлыки на панели быстрого запуска
+```
+
+В подобном окружении возможно использовать pyQr из командной строки как указано выше или назначить эти команды ярлыкам панелей быстрого запуска, если таковые в окружении присутствуют.
